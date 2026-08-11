@@ -1,6 +1,8 @@
 # FR3 Pinocchio C++ 仿真（Windows 兼容版）
 
-> 基于 [xensedyl/fastiter-control-sim](https://github.com/xensedyl/fastiter-control-sim) 的原生 Windows 兼容版本，同时保留 Linux 原有功能。
+## 上游与参考项目
+
+本仓库基于原项目 [xensedyl/fastiter-control-sim](https://github.com/xensedyl/fastiter-control-sim) 开发。原项目提供 FR3 Pinocchio C++ 仿真、FK/IK、轨迹、MeshCat 和 Qt 等核心功能；本仓库在保留这些功能和 Linux 兼容性的基础上，补充原生 Windows/MSVC 构建、Conda 环境、PowerShell xacro 工具和 Windows 部署文档。
 
 本项目使用 Franka 官方 `franka_description` 模型，实现 FR3 机械臂的：
 
