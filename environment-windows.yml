@@ -1,0 +1,19 @@
+name: fr3sim-win
+
+channels:
+  - conda-forge
+
+# Native Windows uses the MSVC toolchain installed by Visual Studio Build Tools.
+# The C++ packages below provide Pinocchio and its ABI-compatible dependencies;
+# CMake/pybind11 and the Python UI are installed with pip below.
+dependencies:
+  - python=3.11
+  - numpy
+  - pinocchio
+  - eigen
+  - urdfdom
+  - console_bridge
+  - tinyxml2
+  - pip
+  - setuptools
+  - wheel

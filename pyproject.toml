@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "pybind11>=2.9"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fr3-control-sim"
+version = "0.1.0"
+description = "FR3 forward/inverse kinematics and MeshCat simulation backed by Pinocchio C++"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "meshcat>=0.3.2",
+  "PySide6>=6.6,<7",
+  "xacro==2.1.1",
+  "PyYAML>=6.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+packages = ["fr3_control_sim"]
+include-package-data = false

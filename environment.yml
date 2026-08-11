@@ -1,0 +1,30 @@
+name: fr3sim
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.12
+  - numpy
+  - pyside6
+  - pinocchio=3.9
+  - pybind11
+  - cmake
+  - pkg-config
+  - cxx-compiler
+  - make
+  - eigen
+  - urdfdom
+  - console_bridge
+  - tinyxml2
+  - pip
+  - setuptools
+  - wheel
+
+# Do not let packages from a globally sourced ROS installation leak into this
+# environment. In particular, pip must install xacro for this environment's
+# Python instead of treating /opt/ros/.../xacro as already installed.
+variables:
+  PYTHONPATH: ""
+  AMENT_PREFIX_PATH: ""
+  PYTHONNOUSERSITE: "1"
