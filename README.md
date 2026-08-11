@@ -1,4 +1,6 @@
-# FR3 Pinocchio C++ 仿真
+# FR3 Pinocchio C++ 仿真（Windows 兼容版）
+
+> 基于 [xensedyl/fastiter-control-sim](https://github.com/xensedyl/fastiter-control-sim) 的原生 Windows 兼容版本，同时保留 Linux 原有功能。
 
 本项目使用 Franka 官方 `franka_description` 模型，实现 FR3 机械臂的：
 
@@ -79,7 +81,7 @@ $env:FRANKA_DESCRIPTION_ROOT = "D:\path\to\franka_description"
 需要 Conda 或 Mamba。推荐使用项目环境文件：
 
 ```bash
-git clone https://github.com/xensedyl/fastiter-control-sim.git
+git clone https://github.com/xensexyq/fastiter-control-sim-win.git
 cd fastiter-control-sim
 mamba env create -f environment.yml
 mamba activate fr3sim
