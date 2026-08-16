@@ -54,40 +54,72 @@ RobotModel::RobotModel(const std::string &urdf_path,
   if (!std::filesystem::is_regular_file(urdf_path_)) {
     throw std::invalid_argument("URDF file does not exist: " + urdf_path_);
   }
-  if (!std::isfinite(finger_position_) || finger_position_ < 0.0 ||
-      finger_position_ > 0.04) {
-    throw std::invalid_argument(
-        "finger_position must be in [0.0, 0.04] meters");
+  if (!std::isfinite(finger_position_)) {
+    throw std::invalid_argument("finger_position must be finite");
   }
 
   pinocchio::Model full_model;
   pinocchio::urdf::buildModel(urdf_path_, full_model);
 
   const auto locked_joints = finger_joint_ids(full_model);
-  if (locked_joints.size() != 2U) {
+  if (locked_joints.size() == 1U) {
     throw std::runtime_error(
-        "Expected official FR3 hand joints fr3_finger_joint1 and "
-        "fr3_finger_joint2 in URDF");
+        "URDF contains only one FR3 finger joint; expected both or neither");
   }
 
-  Eigen::VectorXd reference = pinocchio::neutral(full_model);
-  for (const auto joint_id : locked_joints) {
-    const int idx_q = full_model.joints[joint_id].idx_q();
-    if (idx_q < 0 || full_model.joints[joint_id].nq() != 1) {
-      throw std::runtime_error(
-          "FR3 finger joint has an unsupported configuration");
+  if (locked_joints.size() == 2U) {
+    if (finger_position_ < 0.0 || finger_position_ > 0.04) {
+      throw std::invalid_argument(
+          "finger_position must be in [0.0, 0.04] meters for the FR3 hand");
     }
-    reference[idx_q] = finger_position_;
+    Eigen::VectorXd reference = pinocchio::neutral(full_model);
+    for (const auto joint_id : locked_joints) {
+      const int idx_q = full_model.joints[joint_id].idx_q();
+      if (idx_q < 0 || full_model.joints[joint_id].nq() != 1) {
+        throw std::runtime_error(
+            "FR3 finger joint has an unsupported configuration");
+      }
+      reference[idx_q] = finger_position_;
+    }
+    model_ = pinocchio::buildReducedModel(full_model, locked_joints, reference);
+  } else {
+    model_ = std::move(full_model);
   }
 
-  model_ = pinocchio::buildReducedModel(full_model, locked_joints, reference);
   data_ = pinocchio::Data(model_);
 
   if (model_.nq != 7 || model_.nv != 7) {
     std::ostringstream message;
-    message << "Expected a 7-DoF FR3 arm after locking the hand, got nq="
+    message << "Expected a 7-DoF serial arm after optionally locking the hand, "
+               "got nq="
             << model_.nq << " nv=" << model_.nv;
     throw std::runtime_error(message.str());
+  }
+
+  if (end_effector_frame_.empty()) {
+    for (const char *candidate : {"fr3_hand_tcp", "link_7"}) {
+      for (const auto &frame : model_.frames) {
+        if (frame.name == candidate) {
+          end_effector_frame_ = candidate;
+          break;
+        }
+      }
+      if (!end_effector_frame_.empty()) {
+        break;
+      }
+    }
+    if (end_effector_frame_.empty()) {
+      for (auto frame = model_.frames.rbegin(); frame != model_.frames.rend();
+           ++frame) {
+        if (frame->type == pinocchio::BODY) {
+          end_effector_frame_ = frame->name;
+          break;
+        }
+      }
+    }
+    if (end_effector_frame_.empty()) {
+      throw std::runtime_error("Could not infer an end-effector frame from URDF");
+    }
   }
   (void)resolve_frame(end_effector_frame_);
 }
@@ -124,8 +156,46 @@ std::vector<std::string> RobotModel::frame_names() const {
 }
 
 Eigen::VectorXd RobotModel::home_configuration() const {
-  Eigen::VectorXd q(7);
-  q << 0.0, -kPi / 4.0, 0.0, -3.0 * kPi / 4.0, 0.0, kPi / 2.0, kPi / 4.0;
+  const bool is_official_fr3 =
+      model_.existJointName("fr3_joint1") &&
+      model_.existJointName("fr3_joint2") &&
+      model_.existJointName("fr3_joint3") &&
+      model_.existJointName("fr3_joint4") &&
+      model_.existJointName("fr3_joint5") &&
+      model_.existJointName("fr3_joint6") &&
+      model_.existJointName("fr3_joint7");
+  const bool is_cad_fr3 =
+      model_.existJointName("joint_1") &&
+      model_.existJointName("joint_2") && model_.existJointName("joint_3") &&
+      model_.existJointName("joint_4") && model_.existJointName("joint_5") &&
+      model_.existJointName("joint_6") && model_.existJointName("joint_7");
+
+  Eigen::VectorXd q = pinocchio::neutral(model_);
+  if (is_official_fr3) {
+    q << 0.0, -kPi / 4.0, 0.0, -3.0 * kPi / 4.0, 0.0,
+        kPi / 2.0, kPi / 4.0;
+    return clamp_configuration(q);
+  }
+  if (is_cad_fr3) {
+    // This CAD export uses the opposite axis convention for joints 4, 6 and
+    // 7.  The signs below reproduce the official FR3 ready pose while
+    // respecting the exported limits.
+    q << 0.0, -kPi / 4.0, 0.0, 3.0 * kPi / 4.0, 0.0,
+        -kPi / 2.0, -kPi / 4.0;
+    return clamp_configuration(q);
+  }
+
+  // For an arbitrary 7-axis URDF, keep the initial pose away from joint
+  // limits. This is a better IK seed than Pinocchio's all-zero neutral pose
+  // when zero lies directly on a limit (as it does for the CAD-exported
+  // joint_4 and joint_6).
+  for (int index = 0; index < model_.nq; ++index) {
+    const double lower = model_.lowerPositionLimit[index];
+    const double upper = model_.upperPositionLimit[index];
+    if (std::isfinite(lower) && std::isfinite(upper)) {
+      q[index] = 0.5 * (lower + upper);
+    }
+  }
   return clamp_configuration(q);
 }
 

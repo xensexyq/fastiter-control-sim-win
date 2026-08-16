@@ -51,7 +51,7 @@ PYBIND11_MODULE(_fr3_sim, module) {
 
   py::class_<RobotModel>(module, "RobotModel")
       .def(py::init<const std::string &, const std::string &, double>(),
-           py::arg("urdf_path"), py::arg("end_effector_frame") = "fr3_hand_tcp",
+           py::arg("urdf_path"), py::arg("end_effector_frame") = "",
            py::arg("finger_position") = 0.02)
       .def_property_readonly("nq", &RobotModel::nq)
       .def_property_readonly("nv", &RobotModel::nv)

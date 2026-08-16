@@ -128,6 +128,7 @@ if(FR3_SIM_BUILD_TESTS)
   target_link_libraries(fr3_kinematics_test PRIVATE fr3_kinematics)
   target_compile_definitions(fr3_kinematics_test PRIVATE
     FR3_SIM_DEFAULT_URDF="${CMAKE_CURRENT_SOURCE_DIR}/models/fr3_franka_hand.urdf"
+    FR3_SIM_CAD_URDF="${CMAKE_CURRENT_SOURCE_DIR}/models/URDF/URDF.urdf"
   )
   add_test(NAME fr3_kinematics_smoke COMMAND fr3_kinematics_test)
 endif()

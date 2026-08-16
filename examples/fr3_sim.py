@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FR3 forward/inverse-kinematics and trajectory simulation."""
+"""7-DoF robot forward/inverse-kinematics and trajectory simulation."""
 
 from __future__ import annotations
 
@@ -46,7 +46,12 @@ def _arguments() -> argparse.Namespace:
         action="store_true",
         help="Start MeshCat and print its URL without opening a browser.",
     )
-    parser.add_argument("--urdf", type=Path, help="Path to a generated FR3 + hand URDF.")
+    parser.add_argument("--urdf", type=Path, help="Path to a 7-DoF robot URDF.")
+    parser.add_argument(
+        "--end-effector",
+        default="",
+        help="End-effector frame name; empty selects fr3_hand_tcp or link_7 automatically.",
+    )
     parser.add_argument(
         "--description-root",
         type=Path,
@@ -57,7 +62,7 @@ def _arguments() -> argparse.Namespace:
         "--q",
         type=float,
         nargs="+",
-        help="FK joint angles in degrees; defaults to a built-in FR3 pose.",
+        help="FK joint angles in degrees; defaults to a valid model pose.",
     )
     parser.add_argument(
         "--target",
@@ -90,6 +95,7 @@ def _resolve_urdf(requested: Path | None, description_root: Path) -> Path:
     candidates = (
         description_root.expanduser() / "urdfs" / "fr3_franka_hand.urdf",
         PROJECT_ROOT / "models" / "fr3_franka_hand.urdf",
+        PROJECT_ROOT / "models" / "URDF" / "URDF.urdf",
         PROJECT_ROOT / "resources" / "fr3_franka_hand.urdf",
         PROJECT_ROOT / "share" / "fr3_control_sim" / "fr3_franka_hand.urdf",
     )
@@ -98,16 +104,23 @@ def _resolve_urdf(requested: Path | None, description_root: Path) -> Path:
             return candidate.resolve()
     searched = "\n  ".join(str(path) for path in candidates)
     raise FileNotFoundError(
-        "No generated official FR3 URDF was found. Generate one with\n"
+        "No supported 7-DoF URDF was found. Generate the official model with\n"
         f"  cd {description_root.expanduser()} && python3 scripts/create_urdf.py fr3\n"
         "or pass --urdf explicitly. Searched:\n  " + searched
     )
 
 
-def _demo_configuration(home: np.ndarray) -> np.ndarray:
-    if home.shape != (7,):
+def _demo_configuration(model: fr3.RobotModel, home: np.ndarray) -> np.ndarray:
+    if list(model.joint_names) == [f"fr3_joint{index}" for index in range(1, 8)]:
+        return np.array(
+            [0.35, -0.55, 0.25, -2.0, 0.15, 1.65, 0.40], dtype=float
+        )
+    limits = np.asarray(model.joint_limits, dtype=float)
+    if home.shape != (model.nq,) or limits.shape != (model.nq, 2):
         return home.copy()
-    return np.array([0.35, -0.55, 0.25, -2.0, 0.15, 1.65, 0.40], dtype=float)
+    direction = np.array([0.05, -0.03, 0.04, -0.04, 0.02, 0.03, -0.03])
+    candidate = home + direction[: model.nq] * (limits[:, 1] - limits[:, 0])
+    return np.clip(candidate, limits[:, 0], limits[:, 1])
 
 
 def _trajectory_array(trajectory: object, nq: int) -> np.ndarray:
@@ -137,7 +150,9 @@ def _print_pose(label: str, pose: Sequence[Sequence[float]]) -> None:
 
 def _make_target(model: fr3.RobotModel, home: np.ndarray, values: list[float] | None) -> np.ndarray:
     if values is None:
-        return np.asarray(model.forward_kinematics(_demo_configuration(home)), dtype=float)
+        return np.asarray(
+            model.forward_kinematics(_demo_configuration(model, home)), dtype=float
+        )
     if len(values) not in (3, 6):
         raise ValueError("--target requires x y z or x y z roll pitch yaw")
     if len(values) == 3:
@@ -152,7 +167,11 @@ def _make_target(model: fr3.RobotModel, home: np.ndarray, values: list[float] | 
 
 
 def _run_fk(model: fr3.RobotModel, home: np.ndarray, q_values: list[float] | None) -> np.ndarray:
-    q = _demo_configuration(home) if q_values is None else np.radians(q_values)
+    q = (
+        _demo_configuration(model, home)
+        if q_values is None
+        else np.radians(q_values)
+    )
     if q.shape != (model.nq,):
         raise ValueError(f"--q requires {model.nq} joint values, got {q.size}")
     print(f"q [deg]: {np.array2string(np.degrees(q), precision=2)}")
@@ -332,7 +351,7 @@ def main() -> None:
 
     description_root = args.description_root.expanduser().resolve()
     urdf_path = _resolve_urdf(args.urdf, description_root)
-    model = fr3.RobotModel(str(urdf_path))
+    model = fr3.RobotModel(str(urdf_path), args.end_effector)
     home = np.asarray(model.home_configuration(), dtype=float)
     print(f"URDF: {urdf_path}")
     print(f"end effector: {model.end_effector_frame}")

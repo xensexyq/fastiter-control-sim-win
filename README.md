@@ -1,12 +1,11 @@
 # FR3 Pinocchio C++ 仿真
 
-本项目使用 Franka 官方 `franka_description` 模型，实现 FR3 机械臂的：
+本工程使用 Pinocchio 实现 7 自由度机械臂的正运动学、雅可比、逆运动学和最小加加速度关节轨迹，同时支持 Franka 官方模型和 CAD 导出的无手爪模型。
 
-- C++ 正运动学、雅可比、逆运动学和最小加加速度关节轨迹
-- Python/pybind11 调用接口
-- MeshCat 三维可视化
-- Qt FK/IK 滑条控制面板
-- xacro 转换、Python smoke test 和可选 C++ 测试
+- Pinocchio 计算、IK 和轨迹生成全部在 C++ 中完成。
+- Python 只通过 pybind11 调用 C++，并负责命令行和 MeshCat 显示。
+- 机械臂对外为 7 自由度；官方模型末端为 `fr3_hand_tcp`，CAD 模型末端为 `link_7`。
+- `pip install -e .` 会自动调用 CMake 编译 C++ 扩展，不需要 `build.sh` 或 `run_sim.sh`。
 
 项目对 Linux 和原生 Windows 都提供完整功能。Windows 使用 Visual Studio/MSVC
 和 conda-forge 的 Pinocchio，不需要 ROS、WSL 或 MSYS2。
@@ -37,11 +36,13 @@ cpp/src/bindings.cpp                     pybind11 绑定
 python/fr3_control_sim/                  Python 包和 MeshCat 显示
 examples/fr3_sim.py                      命令行 FK/IK/demo 入口
 examples/fr3_sim_qt.py                   Qt FK/IK 滑条控制界面
-models/fr3_franka_hand.urdf              已生成的 FR3 + Franka Hand URDF
+models/fr3_franka_hand.urdf              FR3 + Franka Hand 模型
+models/URDF/URDF.urdf                    CAD 导出的 7 轴无手爪模型
+models/URDF/meshes/                       CAD 模型的 STL 网格
 scripts/generate_official_urdf.sh        Linux/macOS xacro 转换脚本
 scripts/generate_official_urdf.ps1       Windows PowerShell xacro 转换脚本
-tests/smoke_test.py                      Python/pybind 回归测试
-cpp/tests/test_kinematics.cpp            C++ 回归测试
+cpp/tests/test_kinematics.cpp            C++ 测试
+tests/smoke_test.py                      Python/pybind 测试
 ```
 
 ## 官方模型和网格资源
@@ -190,7 +191,24 @@ python examples\fr3_sim_qt.py --no-open-browser
 
 ## 运行仿真
 
-### Headless demo
+未传 `--urdf` 时仍使用官方 `models/fr3_franka_hand.urdf`。运行新增的 CAD 模型时指定：
+
+```bash
+python examples/fr3_sim.py --urdf models/URDF/URDF.urdf --mode demo
+python examples/fr3_sim_qt.py --urdf models/URDF/URDF.urdf
+```
+
+程序会自动识别该模型没有手指关节，并自动选择 `link_7` 作为末端。其网格路径相对于 URDF 所在目录解析，不依赖 ROS 或 `franka_description`。如需指定其他末端 frame，可使用 `--end-effector FRAME_NAME`。
+
+CAD 模型采用不同的关节轴符号，对应的 ready/home 姿态为：
+
+```text
+[0, -45, 0, 135, 0, -90, -45] deg
+```
+
+该 URDF 没有额外的 TCP/tool0 固定关节，因此 IK 控制的是 `link_7` 原点，不会自行假定工具长度。
+
+### Headless 测试
 
 ```bash
 python examples/fr3_sim.py --headless --mode demo
@@ -267,6 +285,8 @@ FR3 是 7 自由度机械臂，末端位姿任务只有 6 个约束。C++ IK 默
 [0, -45, 0, -135, 0, 90, 45] deg
 ```
 
+以上是官方模型的 home；CAD 模型使用前文所列的轴符号适配姿态。
+
 `IKOptions.posture_gain` 控制约束强度，默认值为 `0.1`；设置为 `0.0` 可关闭零空间姿态约束。求解器会先收敛末端任务，进入位姿容差后再尽量优化零空间姿态，因此不会降低远距离目标的主任务优先级。较大的增益可能增加迭代次数；通常使用默认值即可。
 
 ### Qt 滑条控制
@@ -335,6 +355,31 @@ target = pose_from_xyz_rpy(
 )
 result = model.inverse_kinematics(target, q0, IKOptions())
 trajectory = model.minimum_jerk_trajectory(q0, result.q, 2.0, 0.02)
+```
+
+加载 CAD 模型时不需要额外参数，末端会自动选择为 `link_7`：
+
+```python
+cad_model = RobotModel("models/URDF/URDF.urdf")
+assert cad_model.end_effector_frame == "link_7"
+```
+
+## 可选：手动运行 C++ 测试
+
+正常安装不需要手动执行 CMake。需要单独运行 CTest 时：
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+  -DPython3_EXECUTABLE="$CONDA_PREFIX/bin/python" \
+  -DPython3_FIND_VIRTUALENV=ONLY \
+  -DPKG_CONFIG_USE_CMAKE_PREFIX_PATH=ON \
+  -Dpybind11_DIR="$(python -m pybind11 --cmakedir)" \
+  -DFR3_SIM_BUILD_TESTS=ON
+
+cmake --build build --parallel "$(nproc)"
+ctest --test-dir build --output-on-failure
 ```
 
 ## xacro 转换为 URDF

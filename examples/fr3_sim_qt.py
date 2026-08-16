@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qt slider control panel for the FR3 Pinocchio C++ simulation."""
+"""Qt slider control panel for a 7-DoF Pinocchio C++ simulation."""
 
 from __future__ import annotations
 
@@ -76,6 +76,7 @@ def _resolve_urdf(requested: Path | None, description_root: Path) -> Path:
     candidates = (
         description_root.expanduser() / "urdfs" / "fr3_franka_hand.urdf",
         PROJECT_ROOT / "models" / "fr3_franka_hand.urdf",
+        PROJECT_ROOT / "models" / "URDF" / "URDF.urdf",
         PROJECT_ROOT / "resources" / "fr3_franka_hand.urdf",
         PROJECT_ROOT / "share" / "fr3_control_sim" / "fr3_franka_hand.urdf",
     )
@@ -83,7 +84,7 @@ def _resolve_urdf(requested: Path | None, description_root: Path) -> Path:
         if candidate.is_file():
             return candidate.resolve()
     searched = "\n  ".join(str(path) for path in candidates)
-    raise FileNotFoundError("No FR3 URDF was found. Searched:\n  " + searched)
+    raise FileNotFoundError("No supported 7-DoF URDF was found. Searched:\n  " + searched)
 
 
 class FloatControl(QWidget):
@@ -229,7 +230,7 @@ class Fr3SimWindow(QMainWindow):
         self.render_timer.setInterval(max(1, round(1000.0 / self.render_hz)))
         self.render_timer.timeout.connect(self._render_animation_frame)
 
-        self.setWindowTitle("FR3 Pinocchio FK / IK Control")
+        self.setWindowTitle("7-DoF Pinocchio FK / IK Control")
         self.resize(100, 300)
         self._build_ui()
         self._reset_home()
@@ -242,7 +243,7 @@ class Fr3SimWindow(QMainWindow):
         root_layout.setContentsMargins(16, 14, 16, 14)
         root_layout.setSpacing(10)
 
-        title = QLabel("FR3 Pinocchio C++ FK / IK")
+        title = QLabel("7-DoF Pinocchio C++ FK / IK")
         title.setStyleSheet("font-size: 20px; font-weight: 600;")
         root_layout.addWidget(title)
         root_layout.addWidget(QLabel(f"URDF: {self.urdf_path}"))
@@ -637,7 +638,12 @@ class Fr3SimWindow(QMainWindow):
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("fk", "ik"), default="fk")
-    parser.add_argument("--urdf", type=Path, help="Path to the generated FR3 URDF.")
+    parser.add_argument("--urdf", type=Path, help="Path to a 7-DoF robot URDF.")
+    parser.add_argument(
+        "--end-effector",
+        default="",
+        help="End-effector frame name; empty selects fr3_hand_tcp or link_7 automatically.",
+    )
     parser.add_argument(
         "--description-root",
         type=Path,
@@ -697,7 +703,7 @@ def main() -> int:
     args = _arguments()
     description_root = args.description_root.expanduser().resolve()
     urdf_path = _resolve_urdf(args.urdf, description_root)
-    model = fr3.RobotModel(str(urdf_path))
+    model = fr3.RobotModel(str(urdf_path), args.end_effector)
     print(f"IK posture_gain (null-space): {args.posture_gain:g}")
     print(
         "Qt smoothing: "
@@ -706,7 +712,7 @@ def main() -> int:
     )
 
     app = QApplication.instance() or QApplication(sys.argv)
-    app.setApplicationName("FR3 Control Sim")
+    app.setApplicationName("7-DoF Robot Control Sim")
 
     visualizer = None
     if not args.no_meshcat:
@@ -740,5 +746,5 @@ if __name__ == "__main__":
     except Exception as exc:
         app = QApplication.instance()
         if app is not None:
-            QMessageBox.critical(None, "FR3 simulation error", str(exc))
+            QMessageBox.critical(None, "Robot simulation error", str(exc))
         raise

@@ -6,6 +6,59 @@
 #include <iostream>
 #include <stdexcept>
 
+namespace {
+
+void test_cad_urdf() {
+  fr3_control_sim::RobotModel model(FR3_SIM_CAD_URDF);
+  if (model.nq() != 7 || model.nv() != 7) {
+    throw std::runtime_error("CAD URDF model is not 7-DoF");
+  }
+  if (model.end_effector_frame() != "link_7") {
+    throw std::runtime_error("CAD URDF did not auto-select link_7");
+  }
+
+  const auto names = model.joint_names();
+  if (names.size() != 7 || names.front() != "joint_1" ||
+      names.back() != "joint_7") {
+    throw std::runtime_error("CAD URDF joint names were not loaded");
+  }
+
+  const Eigen::VectorXd home = model.home_configuration();
+  Eigen::VectorXd expected(7);
+  expected << 0.0, -M_PI / 4.0, 0.0, 3.0 * M_PI / 4.0, 0.0,
+      -M_PI / 2.0, -M_PI / 4.0;
+  if (!home.isApprox(expected, 1e-12)) {
+    throw std::runtime_error("CAD URDF ready configuration is incorrect");
+  }
+
+  Eigen::VectorXd target_q = home;
+  target_q[0] += 0.08;
+  target_q[1] += 0.06;
+  target_q[2] -= 0.07;
+  target_q[3] -= 0.05;
+  target_q[4] += 0.05;
+  target_q[5] += 0.04;
+  target_q[6] -= 0.06;
+  const Eigen::Matrix4d target = model.forward_kinematics(target_q);
+
+  fr3_control_sim::IKOptions options;
+  options.max_iterations = 1500;
+  options.max_retries = 4;
+  options.tolerance = 1e-6;
+  const auto result = model.inverse_kinematics(target, home, options);
+  if (!result.success) {
+    throw std::runtime_error("CAD URDF IK did not converge, error=" +
+                             std::to_string(result.error));
+  }
+  const Eigen::Matrix4d recovered = model.forward_kinematics(result.q);
+  if ((recovered.topRightCorner<3, 1>() - target.topRightCorner<3, 1>())
+          .norm() > 1e-5) {
+    throw std::runtime_error("CAD URDF IK/FK round trip is inaccurate");
+  }
+}
+
+} // namespace
+
 int main() {
   try {
     fr3_control_sim::RobotModel model(FR3_SIM_DEFAULT_URDF);
@@ -91,12 +144,15 @@ int main() {
       }
     }
 
+    test_cad_urdf();
+
     std::cout << "FR3 C++ smoke test passed\n"
               << "  joints: " << model.nq() << "\n"
               << "  home tcp xyz: "
               << home_pose.topRightCorner<3, 1>().transpose() << "\n"
               << "  IK error: " << result.error << "\n"
               << "  random reachable IK: 20/20\n";
+    std::cout << "  CAD URDF load/FK/IK: passed\n";
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "FR3 C++ smoke test failed: " << error.what() << '\n';

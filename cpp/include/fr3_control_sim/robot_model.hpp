@@ -38,7 +38,7 @@ struct IKResult {
 class RobotModel {
 public:
   explicit RobotModel(const std::string &urdf_path,
-                      const std::string &end_effector_frame = "fr3_hand_tcp",
+                      const std::string &end_effector_frame = "",
                       double finger_position = 0.02);
 
   int nq() const { return model_.nq; }
