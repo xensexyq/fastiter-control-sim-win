@@ -9,6 +9,7 @@
 #include <pinocchio/parsers/urdf.hpp>
 #include <pinocchio/spatial/explog.hpp>
 
+#include <Eigen/QR>
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -53,40 +54,72 @@ RobotModel::RobotModel(const std::string &urdf_path,
   if (!std::filesystem::is_regular_file(urdf_path_)) {
     throw std::invalid_argument("URDF file does not exist: " + urdf_path_);
   }
-  if (!std::isfinite(finger_position_) || finger_position_ < 0.0 ||
-      finger_position_ > 0.04) {
-    throw std::invalid_argument(
-        "finger_position must be in [0.0, 0.04] meters");
+  if (!std::isfinite(finger_position_)) {
+    throw std::invalid_argument("finger_position must be finite");
   }
 
   pinocchio::Model full_model;
   pinocchio::urdf::buildModel(urdf_path_, full_model);
 
   const auto locked_joints = finger_joint_ids(full_model);
-  if (locked_joints.size() != 2U) {
+  if (locked_joints.size() == 1U) {
     throw std::runtime_error(
-        "Expected official FR3 hand joints fr3_finger_joint1 and "
-        "fr3_finger_joint2 in URDF");
+        "URDF contains only one FR3 finger joint; expected both or neither");
   }
 
-  Eigen::VectorXd reference = pinocchio::neutral(full_model);
-  for (const auto joint_id : locked_joints) {
-    const int idx_q = full_model.joints[joint_id].idx_q();
-    if (idx_q < 0 || full_model.joints[joint_id].nq() != 1) {
-      throw std::runtime_error(
-          "FR3 finger joint has an unsupported configuration");
+  if (locked_joints.size() == 2U) {
+    if (finger_position_ < 0.0 || finger_position_ > 0.04) {
+      throw std::invalid_argument(
+          "finger_position must be in [0.0, 0.04] meters for the FR3 hand");
     }
-    reference[idx_q] = finger_position_;
+    Eigen::VectorXd reference = pinocchio::neutral(full_model);
+    for (const auto joint_id : locked_joints) {
+      const int idx_q = full_model.joints[joint_id].idx_q();
+      if (idx_q < 0 || full_model.joints[joint_id].nq() != 1) {
+        throw std::runtime_error(
+            "FR3 finger joint has an unsupported configuration");
+      }
+      reference[idx_q] = finger_position_;
+    }
+    model_ = pinocchio::buildReducedModel(full_model, locked_joints, reference);
+  } else {
+    model_ = std::move(full_model);
   }
 
-  model_ = pinocchio::buildReducedModel(full_model, locked_joints, reference);
   data_ = pinocchio::Data(model_);
 
   if (model_.nq != 7 || model_.nv != 7) {
     std::ostringstream message;
-    message << "Expected a 7-DoF FR3 arm after locking the hand, got nq="
+    message << "Expected a 7-DoF serial arm after optionally locking the hand, "
+               "got nq="
             << model_.nq << " nv=" << model_.nv;
     throw std::runtime_error(message.str());
+  }
+
+  if (end_effector_frame_.empty()) {
+    for (const char *candidate : {"fr3_hand_tcp", "link_7"}) {
+      for (const auto &frame : model_.frames) {
+        if (frame.name == candidate) {
+          end_effector_frame_ = candidate;
+          break;
+        }
+      }
+      if (!end_effector_frame_.empty()) {
+        break;
+      }
+    }
+    if (end_effector_frame_.empty()) {
+      for (auto frame = model_.frames.rbegin(); frame != model_.frames.rend();
+           ++frame) {
+        if (frame->type == pinocchio::BODY) {
+          end_effector_frame_ = frame->name;
+          break;
+        }
+      }
+    }
+    if (end_effector_frame_.empty()) {
+      throw std::runtime_error("Could not infer an end-effector frame from URDF");
+    }
   }
   (void)resolve_frame(end_effector_frame_);
 }
@@ -123,8 +156,46 @@ std::vector<std::string> RobotModel::frame_names() const {
 }
 
 Eigen::VectorXd RobotModel::home_configuration() const {
-  Eigen::VectorXd q(7);
-  q << 0.0, -kPi / 4.0, 0.0, -3.0 * kPi / 4.0, 0.0, kPi / 2.0, kPi / 4.0;
+  const bool is_official_fr3 =
+      model_.existJointName("fr3_joint1") &&
+      model_.existJointName("fr3_joint2") &&
+      model_.existJointName("fr3_joint3") &&
+      model_.existJointName("fr3_joint4") &&
+      model_.existJointName("fr3_joint5") &&
+      model_.existJointName("fr3_joint6") &&
+      model_.existJointName("fr3_joint7");
+  const bool is_cad_fr3 =
+      model_.existJointName("joint_1") &&
+      model_.existJointName("joint_2") && model_.existJointName("joint_3") &&
+      model_.existJointName("joint_4") && model_.existJointName("joint_5") &&
+      model_.existJointName("joint_6") && model_.existJointName("joint_7");
+
+  Eigen::VectorXd q = pinocchio::neutral(model_);
+  if (is_official_fr3) {
+    q << 0.0, -kPi / 4.0, 0.0, -3.0 * kPi / 4.0, 0.0,
+        kPi / 2.0, kPi / 4.0;
+    return clamp_configuration(q);
+  }
+  if (is_cad_fr3) {
+    // This CAD export uses the opposite axis convention for joints 4, 6 and
+    // 7.  The signs below reproduce the official FR3 ready pose while
+    // respecting the exported limits.
+    q << 0.0, -kPi / 4.0, 0.0, 3.0 * kPi / 4.0, 0.0,
+        -kPi / 2.0, -kPi / 4.0;
+    return clamp_configuration(q);
+  }
+
+  // For an arbitrary 7-axis URDF, keep the initial pose away from joint
+  // limits. This is a better IK seed than Pinocchio's all-zero neutral pose
+  // when zero lies directly on a limit (as it does for the CAD-exported
+  // joint_4 and joint_6).
+  for (int index = 0; index < model_.nq; ++index) {
+    const double lower = model_.lowerPositionLimit[index];
+    const double upper = model_.upperPositionLimit[index];
+    if (std::isfinite(lower) && std::isfinite(upper)) {
+      q[index] = 0.5 * (lower + upper);
+    }
+  }
   return clamp_configuration(q);
 }
 
@@ -246,11 +317,16 @@ IKResult RobotModel::inverse_kinematics_once(const pinocchio::SE3 &target,
                                              pinocchio::FrameIndex frame_id,
                                              const IKOptions &options) const {
   Eigen::VectorXd q = clamp_configuration(q_seed);
+  const Eigen::VectorXd home = home_configuration();
   ErrorState state = pose_error(q, target, frame_id);
   int stalled_iterations = 0;
+  constexpr double posture_tolerance = 1e-4;
 
   for (int iteration = 0; iteration < options.max_iterations; ++iteration) {
-    if (state.norm <= options.tolerance) {
+    const Eigen::VectorXd posture_error = pinocchio::difference(model_, q, home);
+    if (state.norm <= options.tolerance &&
+        (options.posture_gain <= 0.0 ||
+         posture_error.norm() <= posture_tolerance)) {
       return IKResult{q,
                       true,
                       iteration,
@@ -280,8 +356,26 @@ IKResult RobotModel::inverse_kinematics_once(const pinocchio::SE3 &target,
     const double adaptive_damping =
         options.damping * std::max(1.0, 10.0 * state.norm);
     normal.diagonal().array() += adaptive_damping;
-    Eigen::VectorXd delta = -options.step_size * task_jacobian.transpose() *
-                            normal.ldlt().solve(state.vector);
+    const Eigen::Matrix<double, 6, 6> normal_inverse =
+        normal.ldlt().solve(Eigen::Matrix<double, 6, 6>::Identity());
+    const Eigen::MatrixXd damped_pseudoinverse =
+        task_jacobian.transpose() * normal_inverse;
+    Eigen::VectorXd delta =
+        -options.step_size * damped_pseudoinverse * state.vector;
+
+    // FR3 has seven arm joints for a six-dimensional end-effector task.  Use
+    // the remaining null-space motion to prefer the standard ready/home
+    // posture without changing the first-order Cartesian task motion.
+    if (options.posture_gain > 0.0 && state.norm <= options.tolerance) {
+      Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> decomposition(
+          task_jacobian);
+      decomposition.setThreshold(1e-8);
+      const Eigen::MatrixXd exact_pseudoinverse = decomposition.pseudoInverse();
+      const Eigen::MatrixXd nullspace_projector =
+          Eigen::MatrixXd::Identity(model_.nv, model_.nv) -
+          exact_pseudoinverse * task_jacobian;
+      delta += options.posture_gain * nullspace_projector * posture_error;
+    }
 
     const double delta_norm = delta.norm();
     if (options.max_step_norm > 0.0 && delta_norm > options.max_step_norm) {
@@ -296,7 +390,14 @@ IKResult RobotModel::inverse_kinematics_once(const pinocchio::SE3 &target,
       candidate = clamp_configuration(candidate);
       const ErrorState candidate_state =
           pose_error(candidate, target, frame_id);
-      if (candidate_state.norm + 1e-12 < state.norm) {
+      const double candidate_posture_error =
+          pinocchio::difference(model_, candidate, home).norm();
+      const bool task_improved = candidate_state.norm + 1e-12 < state.norm;
+      const bool posture_improved_at_solution =
+          options.posture_gain > 0.0 && state.norm <= options.tolerance &&
+          candidate_state.norm <= options.tolerance &&
+          candidate_posture_error + 1e-10 < posture_error.norm();
+      if (task_improved || posture_improved_at_solution) {
         q = candidate;
         state = candidate_state;
         improved = true;
@@ -311,7 +412,7 @@ IKResult RobotModel::inverse_kinematics_once(const pinocchio::SE3 &target,
       ++stalled_iterations;
       if (stalled_iterations >= 10) {
         return IKResult{q,
-                        false,
+                        state.norm <= options.tolerance,
                         iteration + 1,
                         1,
                         state.norm,
@@ -322,7 +423,7 @@ IKResult RobotModel::inverse_kinematics_once(const pinocchio::SE3 &target,
   }
 
   return IKResult{q,
-                  false,
+                  state.norm <= options.tolerance,
                   options.max_iterations,
                   1,
                   state.norm,
@@ -344,6 +445,7 @@ IKResult RobotModel::inverse_kinematics(const Eigen::Matrix4d &target_matrix,
   if (options.max_iterations <= 0 || options.max_retries < 0 ||
       options.tolerance <= 0.0 || options.damping < 0.0 ||
       options.step_size <= 0.0 || options.max_step_norm < 0.0 ||
+      !std::isfinite(options.posture_gain) || options.posture_gain < 0.0 ||
       options.line_search_steps <= 0) {
     throw std::invalid_argument("Invalid IK options");
   }

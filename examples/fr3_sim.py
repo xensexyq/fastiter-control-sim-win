@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FR3 forward/inverse-kinematics and trajectory simulation."""
+"""7-DoF robot forward/inverse-kinematics and trajectory simulation."""
 
 from __future__ import annotations
 
@@ -31,6 +31,10 @@ def _default_description_root() -> Path:
 
 
 DEFAULT_DESCRIPTION_ROOT = _default_description_root()
+# Edit this value to change the default null-space home-posture constraint.
+# Set it to 0.0 to disable the constraint.  It can also be overridden with
+# the --posture-gain command-line option.
+DEFAULT_POSTURE_GAIN = 0.1
 
 
 def _arguments() -> argparse.Namespace:
@@ -42,7 +46,12 @@ def _arguments() -> argparse.Namespace:
         action="store_true",
         help="Start MeshCat and print its URL without opening a browser.",
     )
-    parser.add_argument("--urdf", type=Path, help="Path to a generated FR3 + hand URDF.")
+    parser.add_argument("--urdf", type=Path, help="Path to a 7-DoF robot URDF.")
+    parser.add_argument(
+        "--end-effector",
+        default="",
+        help="End-effector frame name; empty selects fr3_hand_tcp or link_7 automatically.",
+    )
     parser.add_argument(
         "--description-root",
         type=Path,
@@ -53,7 +62,7 @@ def _arguments() -> argparse.Namespace:
         "--q",
         type=float,
         nargs="+",
-        help="FK joint angles in degrees; defaults to a built-in FR3 pose.",
+        help="FK joint angles in degrees; defaults to a valid model pose.",
     )
     parser.add_argument(
         "--target",
@@ -61,6 +70,15 @@ def _arguments() -> argparse.Namespace:
         nargs="+",
         metavar="VALUE",
         help="IK target: x y z [roll pitch yaw], in meters and radians.",
+    )
+    parser.add_argument(
+        "--posture-gain",
+        type=float,
+        default=DEFAULT_POSTURE_GAIN,
+        help=(
+            f"Null-space home-posture gain for IK (default: "
+            f"{DEFAULT_POSTURE_GAIN:g}; 0 disables the constraint)."
+        ),
     )
     parser.add_argument("--duration", type=float, default=2.0)
     parser.add_argument("--dt", type=float, default=0.02)
@@ -77,6 +95,7 @@ def _resolve_urdf(requested: Path | None, description_root: Path) -> Path:
     candidates = (
         description_root.expanduser() / "urdfs" / "fr3_franka_hand.urdf",
         PROJECT_ROOT / "models" / "fr3_franka_hand.urdf",
+        PROJECT_ROOT / "models" / "URDF" / "URDF.urdf",
         PROJECT_ROOT / "resources" / "fr3_franka_hand.urdf",
         PROJECT_ROOT / "share" / "fr3_control_sim" / "fr3_franka_hand.urdf",
     )
@@ -85,16 +104,23 @@ def _resolve_urdf(requested: Path | None, description_root: Path) -> Path:
             return candidate.resolve()
     searched = "\n  ".join(str(path) for path in candidates)
     raise FileNotFoundError(
-        "No generated official FR3 URDF was found. Generate one with\n"
+        "No supported 7-DoF URDF was found. Generate the official model with\n"
         f"  cd {description_root.expanduser()} && python3 scripts/create_urdf.py fr3\n"
         "or pass --urdf explicitly. Searched:\n  " + searched
     )
 
 
-def _demo_configuration(home: np.ndarray) -> np.ndarray:
-    if home.shape != (7,):
+def _demo_configuration(model: fr3.RobotModel, home: np.ndarray) -> np.ndarray:
+    if list(model.joint_names) == [f"fr3_joint{index}" for index in range(1, 8)]:
+        return np.array(
+            [0.35, -0.55, 0.25, -2.0, 0.15, 1.65, 0.40], dtype=float
+        )
+    limits = np.asarray(model.joint_limits, dtype=float)
+    if home.shape != (model.nq,) or limits.shape != (model.nq, 2):
         return home.copy()
-    return np.array([0.35, -0.55, 0.25, -2.0, 0.15, 1.65, 0.40], dtype=float)
+    direction = np.array([0.05, -0.03, 0.04, -0.04, 0.02, 0.03, -0.03])
+    candidate = home + direction[: model.nq] * (limits[:, 1] - limits[:, 0])
+    return np.clip(candidate, limits[:, 0], limits[:, 1])
 
 
 def _trajectory_array(trajectory: object, nq: int) -> np.ndarray:
@@ -124,7 +150,9 @@ def _print_pose(label: str, pose: Sequence[Sequence[float]]) -> None:
 
 def _make_target(model: fr3.RobotModel, home: np.ndarray, values: list[float] | None) -> np.ndarray:
     if values is None:
-        return np.asarray(model.forward_kinematics(_demo_configuration(home)), dtype=float)
+        return np.asarray(
+            model.forward_kinematics(_demo_configuration(model, home)), dtype=float
+        )
     if len(values) not in (3, 6):
         raise ValueError("--target requires x y z or x y z roll pitch yaw")
     if len(values) == 3:
@@ -139,7 +167,11 @@ def _make_target(model: fr3.RobotModel, home: np.ndarray, values: list[float] | 
 
 
 def _run_fk(model: fr3.RobotModel, home: np.ndarray, q_values: list[float] | None) -> np.ndarray:
-    q = _demo_configuration(home) if q_values is None else np.radians(q_values)
+    q = (
+        _demo_configuration(model, home)
+        if q_values is None
+        else np.radians(q_values)
+    )
     if q.shape != (model.nq,):
         raise ValueError(f"--q requires {model.nq} joint values, got {q.size}")
     print(f"q [deg]: {np.array2string(np.degrees(q), precision=2)}")
@@ -151,10 +183,16 @@ def _solve_ik(
     model: fr3.RobotModel,
     home: np.ndarray,
     target_values: list[float] | None,
+    posture_gain: float = DEFAULT_POSTURE_GAIN,
 ) -> np.ndarray:
     target = _make_target(model, home, target_values)
     _print_pose("target", target)
-    result = model.inverse_kinematics(target, home, fr3.IKOptions())
+    options = fr3.IKOptions()
+    if not np.isfinite(posture_gain) or posture_gain < 0.0:
+        raise ValueError("--posture-gain must be a finite non-negative number")
+    options.posture_gain = float(posture_gain)
+    print(f"IK posture_gain (null-space): {options.posture_gain:.3f}")
+    result = model.inverse_kinematics(target, home, options)
     error = getattr(result, "error", getattr(result, "residual", float("nan")))
     iterations = getattr(result, "iterations", -1)
     print(f"IK success={result.success} iterations={iterations} error={error:.3e}")
@@ -223,13 +261,21 @@ def _interactive_ik(
     visualizer: object | None,
     duration: float,
     dt: float,
+    posture_gain: float = DEFAULT_POSTURE_GAIN,
 ) -> None:
     current = home.copy()
     options = fr3.IKOptions()
+    if not np.isfinite(posture_gain) or posture_gain < 0.0:
+        raise ValueError("--posture-gain must be a finite non-negative number")
+    options.posture_gain = float(posture_gain)
     if visualizer is not None:
         visualizer.update(current)
 
     print("\nInteractive IK: input a target pose.")
+    print(
+        f"  posture_gain (null-space): {options.posture_gain:.3f} "
+        "(set with --posture-gain; 0 disables)"
+    )
     print("  x y z                    (meters; keep current orientation)")
     print("  x y z roll pitch yaw     (meters + radians)")
     print("  example: 0.35 0.10 0.45")
@@ -305,11 +351,12 @@ def main() -> None:
 
     description_root = args.description_root.expanduser().resolve()
     urdf_path = _resolve_urdf(args.urdf, description_root)
-    model = fr3.RobotModel(str(urdf_path))
+    model = fr3.RobotModel(str(urdf_path), args.end_effector)
     home = np.asarray(model.home_configuration(), dtype=float)
     print(f"URDF: {urdf_path}")
     print(f"end effector: {model.end_effector_frame}")
     print(f"joints ({model.nq}): {', '.join(model.joint_names)}")
+    print(f"IK posture_gain (null-space): {args.posture_gain:g}")
 
     visualizer = None
     if not args.headless:
@@ -327,13 +374,20 @@ def main() -> None:
         _interactive_fk(model, home, visualizer)
         return
     if args.mode == "ik" and args.target is None:
-        _interactive_ik(model, home, visualizer, args.duration, args.dt)
+        _interactive_ik(
+            model,
+            home,
+            visualizer,
+            args.duration,
+            args.dt,
+            args.posture_gain,
+        )
         return
 
     if args.mode == "fk":
         q_goal = _run_fk(model, home, args.q)
     else:
-        q_goal = _solve_ik(model, home, args.target)
+        q_goal = _solve_ik(model, home, args.target, args.posture_gain)
 
     if args.mode == "demo":
         _print_pose("home", model.forward_kinematics(home))

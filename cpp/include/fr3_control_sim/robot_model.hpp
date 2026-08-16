@@ -20,6 +20,7 @@ struct IKOptions {
   double damping = 1e-6;
   double step_size = 0.7;
   double max_step_norm = 0.25;
+  double posture_gain = 0.1;
   int line_search_steps = 8;
   unsigned int random_seed = 42;
 };
@@ -37,7 +38,7 @@ struct IKResult {
 class RobotModel {
 public:
   explicit RobotModel(const std::string &urdf_path,
-                      const std::string &end_effector_frame = "fr3_hand_tcp",
+                      const std::string &end_effector_frame = "",
                       double finger_position = 0.02);
 
   int nq() const { return model_.nq; }
