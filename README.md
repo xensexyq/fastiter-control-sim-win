@@ -1,6 +1,18 @@
-# FR3 Pinocchio C++ 仿真（Windows 兼容版）
+<a id="fr3-pinocchio-c-仿真windows-兼容版"></a>
 
-## 上游与参考项目
+<div align="center">
+
+# fastiter-control-sim-win
+
+**FR3 Pinocchio C++ 仿真的 Windows/MSVC 适配与 CAD 模型入口**
+
+[特性](#特性) · [安装](#安装) · [快速验证](#快速验证) · [结构](#工程结构) · [文档](#文档)
+
+</div>
+
+<a id="上游与参考项目"></a>
+
+## 特性
 
 本仓库基于原项目 [xensedyl/fastiter-control-sim](https://github.com/xensedyl/fastiter-control-sim) 开发。原项目提供 FR3 Pinocchio C++ 仿真、FK/IK、轨迹、MeshCat 和 Qt 等核心功能；本仓库在保留这些功能和 Linux 兼容性的基础上，补充原生 Windows/MSVC 构建、Conda 环境、PowerShell xacro 工具和 Windows 部署文档。
 
@@ -16,68 +28,24 @@
 
 默认 URDF 为 `models/fr3_franka_hand.urdf`，末端坐标系为 `fr3_hand_tcp`。
 
-## 快速验证
+## 系统架构
 
-激活对应环境后执行：
+C++ / Pinocchio 负责运动学和轨迹，pybind11 提供 Python 接口；Python 示例负责命令行交互、MeshCat 显示与 Qt 控件。
 
-```bash
-python tests/smoke_test.py
-python examples/fr3_sim.py --headless --mode demo
-```
+这是仿真与离线计算入口，不是实机安全控制器。兄弟仓库 [fastiter-control-sim](https://github.com/xensexyq/fastiter-control-sim) 也包含跨平台配置；两者是独立仓库，不能假定提交和功能自动同步。本次仅整理说明，不合并仓库或改变维护策略。
 
-`--headless` 不需要三维网格资源。需要 MeshCat 或 Qt 时，先按下文准备
-`franka_description`。
+## 安装
 
-## 工程结构
-
-```text
-environment.yml                          Linux/macOS Conda 环境
-environment-windows.yml                  原生 Windows Conda 环境
-CMakeLists.txt                           C++/pybind11 构建配置
-cpp/include/fr3_control_sim/             C++ 公共头文件
-cpp/src/robot_model.cpp                  Pinocchio FK/IK/轨迹实现
-cpp/src/bindings.cpp                     pybind11 绑定
-python/fr3_control_sim/                  Python 包和 MeshCat 显示
-examples/fr3_sim.py                      命令行 FK/IK/demo 入口
-examples/fr3_sim_qt.py                   Qt FK/IK 滑条控制界面
-models/fr3_franka_hand.urdf              FR3 + Franka Hand 模型
-models/URDF/URDF.urdf                    CAD 导出的 7 轴无手爪模型
-models/URDF/meshes/                       CAD 模型的 STL 网格
-scripts/generate_official_urdf.sh        Linux/macOS xacro 转换脚本
-scripts/generate_official_urdf.ps1       Windows PowerShell xacro 转换脚本
-cpp/tests/test_kinematics.cpp            C++ 测试
-tests/smoke_test.py                      Python/pybind 测试
-```
-
-## 官方模型和网格资源
-
-仓库跟踪生成后的 URDF，但不跟踪官方仓库中的大型 DAE 网格文件。这样可以保持
-代码仓库轻量，同时仍然兼容官方模型。准备可视化资源：
+先获取本仓库，再按系统选择安装流程。需要 Conda/Mamba 及对应 C++ 工具链；Python 最低版本见 [pyproject.toml](pyproject.toml)，推荐使用仓库环境文件。
 
 ```bash
-git clone --depth 1 https://github.com/frankarobotics/franka_description.git \
-  third_party/franka_description
+git clone https://github.com/xensexyq/fastiter-control-sim-win.git
+cd fastiter-control-sim-win
 ```
 
-Windows PowerShell 写法：
+[Linux/macOS](#linuxmacos-安装) · [原生 Windows](#原生-windows-安装) · [可视化网格](#官方模型和网格资源)
 
-```powershell
-git clone --depth 1 https://github.com/frankarobotics/franka_description.git `
-  third_party\franka_description
-```
-
-两个示例会自动搜索以下目录：
-
-1. `FRANKA_DESCRIPTION_ROOT` 环境变量指定的目录
-2. 项目内 `third_party/franka_description`
-3. 项目根目录下的 `franka_description`
-4. Linux 兼容路径 `/home/xense/fastiter/franka_description`
-
-已有其他副本时，可以设置：
-
-```powershell
-$env:FRANKA_DESCRIPTION_ROOT = "D:\path\to\franka_description"
-```
+从此处已完成克隆时，跳过下方重复的 clone/cd 命令。首次安装完成后，再执行快速验证。
 
 ## Linux/macOS 安装
 
@@ -85,7 +53,7 @@ $env:FRANKA_DESCRIPTION_ROOT = "D:\path\to\franka_description"
 
 ```bash
 git clone https://github.com/xensexyq/fastiter-control-sim-win.git
-cd fastiter-control-sim
+cd fastiter-control-sim-win
 mamba env create -f environment.yml
 mamba activate fr3sim
 python -m pip install -e .
@@ -193,6 +161,75 @@ python examples\fr3_sim_qt.py --no-open-browser
 - xacro：Windows 使用 PowerShell 脚本；Linux/macOS 使用 Bash 脚本。
 - 网格：两端的 MeshCat/Qt 都需要 `franka_description`；无头模式不需要。
 
+## 官方模型和网格资源
+
+仓库跟踪生成后的 URDF，但不跟踪官方仓库中的大型 DAE 网格文件。这样可以保持
+代码仓库轻量，同时仍然兼容官方模型。准备可视化资源：
+
+```bash
+git clone --depth 1 https://github.com/frankarobotics/franka_description.git \
+  third_party/franka_description
+```
+
+Windows PowerShell 写法：
+
+```powershell
+git clone --depth 1 https://github.com/frankarobotics/franka_description.git `
+  third_party\franka_description
+```
+
+两个示例会自动搜索以下目录：
+
+1. `FRANKA_DESCRIPTION_ROOT` 环境变量指定的目录
+2. 项目内 `third_party/franka_description`
+3. 项目根目录下的 `franka_description`
+4. Linux 兼容路径 `/home/xense/fastiter/franka_description`
+
+已有其他副本时，可以设置：
+
+```powershell
+$env:FRANKA_DESCRIPTION_ROOT = "D:\path\to\franka_description"
+```
+
+## 快速验证
+
+激活对应环境后执行：
+
+```bash
+python tests/smoke_test.py
+python examples/fr3_sim.py --headless --mode demo
+```
+
+`--headless` 不需要三维网格资源。需要 MeshCat 或 Qt 时，先按[模型资源说明](#官方模型和网格资源)准备
+`franka_description`。
+
+## 工程结构
+
+```text
+environment.yml                          Linux/macOS Conda 环境
+environment-windows.yml                  原生 Windows Conda 环境
+CMakeLists.txt                           C++/pybind11 构建配置
+cpp/include/fr3_control_sim/             C++ 公共头文件
+cpp/src/robot_model.cpp                  Pinocchio FK/IK/轨迹实现
+cpp/src/bindings.cpp                     pybind11 绑定
+python/fr3_control_sim/                  Python 包和 MeshCat 显示
+examples/fr3_sim.py                      命令行 FK/IK/demo 入口
+examples/fr3_sim_qt.py                   Qt FK/IK 滑条控制界面
+models/fr3_franka_hand.urdf              FR3 + Franka Hand 模型
+models/URDF/URDF.urdf                    CAD 导出的 7 轴无手爪模型
+models/URDF/meshes/                       CAD 模型的 STL 网格
+scripts/generate_official_urdf.sh        Linux/macOS xacro 转换脚本
+scripts/generate_official_urdf.ps1       Windows PowerShell xacro 转换脚本
+cpp/tests/test_kinematics.cpp            C++ 测试
+tests/smoke_test.py                      Python/pybind 测试
+```
+
+## 文档
+
+[仿真示例](#运行仿真) · [Python 接口](#python-接口) · [xacro 转换](#xacro-转换为-urdf) · [测试与构建](#测试与重新构建) · [常见问题](#常见问题)
+
+安装、接口和排障集中在本 README。保留原有模型来源和许可，不以仓库名推断硬件或平台验证状态。
+
 ## 运行仿真
 
 未传 `--urdf` 时仍使用官方 `models/fr3_franka_hand.urdf`。运行新增的 CAD 模型时指定：
@@ -262,6 +299,8 @@ IK 成功后，C++ 生成 50 Hz 的最小加加速度关节轨迹并由 MeshCat 
 ```bash
 python examples/fr3_sim_qt.py
 python examples/fr3_sim_qt.py --mode ik
+```
+
 ```bash
 python examples/fr3_sim.py --mode ik \
   --target 0.35 0.10 0.45 3.1415926 0.0 0.2
@@ -460,6 +499,10 @@ Linux 环境若曾执行过 ROS `setup.bash`，重新激活 `fr3sim`，并确保
 
 pip 负责 Python 包和当前项目的 C++ 扩展构建；Pinocchio、Eigen、urdfdom、tinyxml2
 等 ABI 敏感的 C++ 依赖必须由对应平台的 conda-forge 或 Visual Studio 工具链提供。
+
+## 致谢
+
+原项目：[xensedyl/fastiter-control-sim](https://github.com/xensedyl/fastiter-control-sim)。现有 MIT 许可证保留原作者 dongyaolin 的署名。Franka 模型来源及授权见下方许可证说明。
 
 ## 许可证
 
